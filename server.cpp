@@ -56,6 +56,8 @@ class Server
   public:
     int sock;               // socket of server connection
     std::string groupId;    // group id of server
+    std::string address;    // address of server
+    int port;               // port of server
 
     Server(int socket) : sock(socket) {}
 
@@ -73,31 +75,9 @@ class Server
 std::map<int, Client*> clients; // Lookup table for per Client information
 std::map<int, Server*> servers;
 int connectionCount = 0;
-
-
-// Threaded function for handling responses from server
-void listenServer(int serverSocket)
-{
-    int nread;                                  // Bytes read from socket
-    char buffer[1025];                          // Buffer for reading input
-
-    while(true)
-    {
-       memset(buffer, 0, sizeof(buffer));
-       nread = read(serverSocket, buffer, sizeof(buffer));
-
-       if(nread == 0)                      // Server has dropped us
-       {
-          printf("Over and Out\n");
-          exit(0);
-       }
-       else if(nread > 0)
-       {
-          printf("%s\n", buffer);
-       }
-       printf("here\n");
-    }
-}
+char* addressToConnectTo = "127.0.0.1";
+char* portToConnectTo = "4026";
+std::string portConnected;
 
 // Open socket for specified port.
 //
@@ -172,8 +152,70 @@ void closeClient(int serverSocket, fd_set *openSockets, int *maxfds)
 int clientCommand(int clientSocket, fd_set *openSockets, int *maxfds, 
                   char *buffer) 
 {
-    printf("%d", buffer[strlen(buffer)-1]);
+    
+    // if (buffer[0] == SOH && buffer[strlen(buffer)-1] == EOT) 
+    // {
+    //     printf("string is valid\n");
+    // }
+    // else 
+    // {
+    //     printf("string is not valid\n");
+    //     return -1;
+    // }
+    
+    std::string s(buffer);
+    
+    s = s.substr(1, s.size()-2);
+    
+    std::string token = ",";
+    std::vector<std::string> tokens;
+    std::string item;
 
+    for (uint i = 0; i < s.size(); i++) 
+    {
+        if (s[i] == ',')
+        {
+            tokens.push_back(item);
+            item = "";
+        }
+        
+        else 
+        {
+            item.push_back(s[i]);
+        }
+        if (i == s.size()-1)
+        {
+            tokens.push_back(item);
+        }
+    }
+    
+    if (tokens[0].compare("LISTSERVERS") == 0 && (tokens.size() == 2))
+    {
+        servers[clientSocket]->groupId = tokens[1];
+        std::string msg;
+        msg += " SERVERS,";
+        msg[0] = SOH;
+        msg += "P3_GROUP_26,127.0.0.1,";
+        msg += portConnected + ";";
+        for (auto const& pair : servers)
+        {
+            Server* server = pair.second;
+            msg += server->groupId;
+            msg += "," + server->address;
+            msg += "," + std::to_string(server->port);
+            msg += ";";
+        }
+        msg += " ";
+        std::cout << "Sending: " + msg + "\n";
+        msg[msg.length()-1] = EOT;
+        printf("%d\n", msg[0]);
+        if (send(clientSocket, msg.c_str(), msg.length(), 0) < 0)
+        {
+            perror("send() failed\n");
+            return(-1);
+        }
+        printf("Reply has been sent\n");
+    }
 
     return 0;
   /*std::vector<std::string> tokens;
@@ -253,12 +295,16 @@ int clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
 }
 
 void sendCommand(int sock) {
-    char* buffer = (char*)malloc(1025);
+    char buffer[1025];
     int nwrite;
+    int nread;
+    char readBuf[1025];
     bool finished = false;
+    usleep(3000);
     while(!finished) {
+        memset(readBuf, 0, sizeof(readBuf));
         bzero(buffer, sizeof(buffer));
-
+        printf("Type in command:");
         fgets(buffer, sizeof(buffer), stdin);
         
         int bufSize = strlen(buffer);
@@ -267,17 +313,28 @@ void sendCommand(int sock) {
         for (uint i = 0; i < bufSize; i++) {
             tmp[i+1] = buffer[i];
         }
-        tmp[bufSize+1] = EOT; 
-        free(buffer);
+        tmp[bufSize] = EOT; 
 
-        nwrite = send(sock, buffer, strlen(buffer),0);
+        nwrite = send(sock, tmp, strlen(tmp),0);
+        
 
         if(nwrite  == -1)
         {
             perror("send() to server failed: ");
             finished = true;
         }
+        nread = read(sock, readBuf, sizeof(readBuf));
+        if(nread < 0)                      
+        {
+            printf("Over and Out\n");
+            exit(0);
+        }
+        else if(nread > 0)
+        {
+            printf("%s\n", readBuf);
+        }
     }
+    
 }
 
 
@@ -303,15 +360,14 @@ int main(int argc, char* argv[])
     int set = 1;
     int nwrite;
 
-    
     if(argc != 2)
     {
         printf("Usage: chat_server <ip port i am listening to> <ip address i want to connect to> <port i want to connect to>\n");
         exit(0);
     }
 
-    char* addressToConnectTo = "127.0.0.1";
-    char* portToConnectTo = "4043";
+    
+    
 
     // connect to server
 
@@ -348,11 +404,17 @@ int main(int argc, char* argv[])
     
     
     servers[serverSock] = new Server(serverSock);
+    //servers[serverSock]->groupId = "P3";
+    servers[serverSock]->address = addressToConnectTo;
+    servers[serverSock]->port = atoi(portToConnectTo);
 
     //std::thread serverThread(listenServer, serverSock);
 
     FD_SET(serverSock, &openSockets);
+    maxfds = serverSock;
+    char* initSend = "\1LISTSERVERS,P3_GROUP_26\4";
 
+    if (send(serverSock, initSend, sizeof(initSend), 0) < 0) {perror("Error sending initial LISTSERVER\n");}
     
 
     // lsiten to servers
@@ -360,7 +422,9 @@ int main(int argc, char* argv[])
     // Setup socket for server to listen to
     
     listenSock = open_socket(atoi(argv[1])); 
+    
     printf("Listening on port: %d\n", listenSock);
+    
 
     if(listen(listenSock, BACKLOG) < 0)
     {
@@ -370,16 +434,19 @@ int main(int argc, char* argv[])
     else 
     // Add listen socket to socket set we are monitoring
     {
+        portConnected = argv[1];
         FD_SET(listenSock, &openSockets);
         maxfds = listenSock;
     }
-
+    
     std::thread serverThread(sendCommand, serverSock);
+    
     
     finished = false;
 
     while(!finished)
     {
+        
         // Get modifiable copy of readSockets
         readSockets = exceptSockets = openSockets;
         memset(buffer, 0, sizeof(buffer));
@@ -402,6 +469,12 @@ int main(int argc, char* argv[])
                serverSock = accept(listenSock, (struct sockaddr *)&server,
                                    &serverLen);
 
+                char ip[INET_ADDRSTRLEN]; 
+                inet_ntop(AF_INET, &(server.sin_addr), ip, INET_ADDRSTRLEN);
+
+                printf("Connection established with IP : %s and PORT : %d\n", ip, ntohs(server.sin_port));
+
+
                // Add new server to the list of open sockets
                
                FD_SET(serverSock, &openSockets);
@@ -412,6 +485,8 @@ int main(int argc, char* argv[])
                // create a new server to store information.
                // clients[clientSock] = new Client(clientSock);
                servers[serverSock] = new Server(serverSock);
+               servers[serverSock]->address = ip;
+               servers[serverSock]->port = ntohs(server.sin_port);
 
 
                // Decrement the number of sockets waiting to be dealt with
@@ -419,7 +494,7 @@ int main(int argc, char* argv[])
                 
                printf("server connected on server: %d\n", serverSock);
             }
-            // Now check for commands from clients
+            // Now check for commands from servers
             while(n-- > 0)
             {
                for(auto const& pair : servers)
@@ -428,7 +503,7 @@ int main(int argc, char* argv[])
 
                   if(FD_ISSET(server->sock, &readSockets))
                   {
-                      // recv() == 0 means client has closed connection
+                      // recv() == 0 means server has closed connection
                       if(recv(server->sock, buffer, sizeof(buffer), MSG_DONTWAIT) == 0)
                       {
                           printf("Client closed connection: %d", server->sock);
