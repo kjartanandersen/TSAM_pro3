@@ -1,9 +1,9 @@
 //
-// Simple chat server for TSAM-409
+// Botnet server
 //
-// Command line: ./chat_server 4000 
+// Command line: ./tsamvgroup26 <port to be on> 
 //
-// Author: Jacky Mallett (jacky@ru.is)
+// Author: Kjartan Már Andersen (kjartana17@ru.is)
 //
 #include <stdio.h>
 #include <errno.h>
@@ -72,11 +72,10 @@ class Server
 
 std::map<int, Client*> clients; // Lookup table for per Client information
 std::map<int, Server*> servers;
+int connectionCount = 0;
 
-// Open socket for specified port.
-//
-// Returns -1 if unable to create the socket for any reason.
 
+// Threaded function for handling responses from server
 void listenServer(int serverSocket)
 {
     int nread;                                  // Bytes read from socket
@@ -100,6 +99,9 @@ void listenServer(int serverSocket)
     }
 }
 
+// Open socket for specified port.
+//
+// Returns -1 if unable to create the socket for any reason.
 int open_socket(int portno)
 {
    struct sockaddr_in sk_addr;   // address settings for bind()
@@ -170,6 +172,9 @@ void closeClient(int serverSocket, fd_set *openSockets, int *maxfds)
 int clientCommand(int clientSocket, fd_set *openSockets, int *maxfds, 
                   char *buffer) 
 {
+    printf("%d", buffer[strlen(buffer)-1]);
+
+
     return 0;
   /*std::vector<std::string> tokens;
   std::string token;
@@ -247,191 +252,203 @@ int clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
      
 }
 
-char* makeStringSendable(char* buffer) {
-    int bufSize = strlen(buffer);
-    char tmp[bufSize+2];
-    tmp[0] = SOH;
-    for (uint i = 0; i < bufSize; i++) {
-        tmp[i+1] = buffer[i];
+void sendCommand(int sock) {
+    char* buffer = (char*)malloc(1025);
+    int nwrite;
+    bool finished = false;
+    while(!finished) {
+        bzero(buffer, sizeof(buffer));
+
+        fgets(buffer, sizeof(buffer), stdin);
+        
+        int bufSize = strlen(buffer);
+        char tmp[bufSize];
+        tmp[0] = SOH;
+        for (uint i = 0; i < bufSize; i++) {
+            tmp[i+1] = buffer[i];
+        }
+        tmp[bufSize+1] = EOT; 
+        free(buffer);
+
+        nwrite = send(sock, buffer, strlen(buffer),0);
+
+        if(nwrite  == -1)
+        {
+            perror("send() to server failed: ");
+            finished = true;
+        }
     }
-    tmp[bufSize+1] = EOT;
-    buffer = tmp;
-    return buffer;
 }
 
 
 
 int main(int argc, char* argv[])
 {
+    
     bool finished;
+    int serverSock;
     int listenSock;                 // Socket for connections to server
     int clientSock;                 // Socket of connecting client
-    int serverSock;                 // Socket of connecting server
     fd_set openSockets;             // Current open sockets 
     fd_set readSockets;             // Socket list for select()        
     fd_set exceptSockets;           // Exception socket list
     int maxfds;                     // Passed to select() as max fd in set
     struct sockaddr_in client;
+    struct sockaddr_in server;
+    socklen_t serverLen;
     socklen_t clientLen;
-    char* buffer;              // buffer for reading from server
+    char buffer[1025];              // buffer for reading from server
     struct addrinfo hints, *svr;
     struct sockaddr_in serv_addr;
     int set = 1;
     int nwrite;
 
-    if(argc != 4)
+    
+    if(argc != 2)
     {
         printf("Usage: chat_server <ip port i am listening to> <ip address i want to connect to> <port i want to connect to>\n");
         exit(0);
     }
 
-    hints.ai_family   = AF_INET;            // IPv4 only addresses
-    hints.ai_socktype = SOCK_STREAM;
+    char* addressToConnectTo = "127.0.0.1";
+    char* portToConnectTo = "4043";
 
+    // connect to server
+
+    hints.ai_family   = AF_INET;            // IPv4 only addresses
+    hints.ai_socktype = SOCK_STREAM | SOCK_NONBLOCK;
+    hints.ai_flags    = AI_PASSIVE;
 
     memset(&hints,   0, sizeof(hints));
 
-    if(getaddrinfo(argv[2], argv[3], &hints, &svr) != 0)
-   {
-       perror("getaddrinfo failed: ");
-       exit(0);
-   }
+    if(getaddrinfo(addressToConnectTo, portToConnectTo, &hints, &svr) != 0)
+    {
+        perror("getaddrinfo failed: ");
+        exit(0);
+    }
 
-   struct hostent *server;
-   server = gethostbyname(argv[2]);
+    serverSock = socket(svr->ai_family, svr->ai_socktype, svr->ai_protocol);
 
-   bzero((char *) &serv_addr, sizeof(serv_addr));
-   serv_addr.sin_family = AF_INET;
-   bcopy((char *)server->h_addr,
-      (char *)&serv_addr.sin_addr.s_addr,
-      server->h_length);
-   serv_addr.sin_port = htons(atoi(argv[3]));
-
-   serverSock = socket(AF_INET, SOCK_STREAM, 0);
-
-   if(setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &set, sizeof(set)) < 0)
-   {
-       printf("Failed to set SO_REUSEADDR for port %s\n", argv[3]);
-       perror("setsockopt failed: ");
-   }
-
-   if(connect(serverSock, (struct sockaddr *)&serv_addr, sizeof(serv_addr) )< 0)
-   {
-       printf("Failed to open socket to server: %s\n", argv[2]);
-       perror("Connect failed: ");
-       exit(0);
-   }
-
-    // Listen and print replies from server
-   std::thread serverThread(listenServer, serverSock);
-
-   finished = false;
-   while(!finished)
-   {
-       bzero(buffer, sizeof(buffer));
-
-       fgets(buffer, sizeof(buffer), stdin);
-
-       buffer = makeStringSendable(buffer);      
-
-       nwrite = send(serverSock, buffer, strlen(buffer),0);
-
-       if(nwrite  == -1)
-       {
-           perror("send() to server failed: ");
-           finished = true;
-       }
-
-   }
-
-   
-
-    // // Setup socket for server to listen to
     
-    // listenSock = open_socket(atoi(argv[1])); 
-    // printf("Listening on port: %d\n", listenSock);
 
-    // if(listen(listenSock, BACKLOG) < 0)
-    // {
-    //     printf("Listen failed on port %s\n", argv[1]);
-    //     exit(0);
-    // }
-    // else 
-    // // Add listen socket to socket set we are monitoring
-    // {
-    //     FD_SET(listenSock, &openSockets);
-    //     maxfds = listenSock;
-    // }
+    // Turn on SO_REUSEADDR to allow socket to be quickly reused after 
+    // program exit.
 
-    // finished = false;
+    if(setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &set, sizeof(set)) < 0)
+    {
+        printf("Failed to set SO_REUSEADDR for port %s\n", argv[3]);
+        perror("setsockopt failed: ");
+    }
+    if(connect(serverSock, svr->ai_addr, svr->ai_addrlen )< 0)
+    {
+        printf("Failed to open socket to server: %s\n", addressToConnectTo);
+        perror("Connect failed: ");
+        exit(0);
+    }
+    
+    
+    servers[serverSock] = new Server(serverSock);
 
-    // while(!finished)
-    // {
-    //     // Get modifiable copy of readSockets
-    //     readSockets = exceptSockets = openSockets;
-    //     memset(buffer, 0, sizeof(buffer));
+    //std::thread serverThread(listenServer, serverSock);
 
-    //     // Look at sockets and see which ones have something to be read()
-    //     int n = select(maxfds + 1, &readSockets, NULL, &exceptSockets, NULL);
+    FD_SET(serverSock, &openSockets);
 
-    //     if(n < 0)
-    //     {
-    //         perror("select failed - closing down\n");
-    //         finished = true;
-    //     }
-    //     else
-    //     {
-    //         // First, accept  any new connections to the server on the listening socket
-    //         if(FD_ISSET(listenSock, &readSockets))
-    //         {
-    //            serverSock = accept(listenSock, (struct sockaddr *)&client,
-    //                                &clientLen);
+    
 
-    //            // Add new client to the list of open sockets
-    //            FD_SET(serverSock, &openSockets);
+    // lsiten to servers
 
-    //            // And update the maximum file descriptor
-    //            maxfds = std::max(maxfds, serverSock);
+    // Setup socket for server to listen to
+    
+    listenSock = open_socket(atoi(argv[1])); 
+    printf("Listening on port: %d\n", listenSock);
 
-    //            // create a new client to store information.
-    //            clients[clientSock] = new Client(clientSock);
-    //            servers[serverSock] = new Server(serverSock);
+    if(listen(listenSock, BACKLOG) < 0)
+    {
+        printf("Listen failed on port %s\n", argv[1]);
+        exit(0);
+    }
+    else 
+    // Add listen socket to socket set we are monitoring
+    {
+        FD_SET(listenSock, &openSockets);
+        maxfds = listenSock;
+    }
+
+    std::thread serverThread(sendCommand, serverSock);
+    
+    finished = false;
+
+    while(!finished)
+    {
+        // Get modifiable copy of readSockets
+        readSockets = exceptSockets = openSockets;
+        memset(buffer, 0, sizeof(buffer));
+
+        // Look at sockets and see which ones have something to be read()
+        int n = select(maxfds + 1, &readSockets, NULL, &exceptSockets, NULL);
+
+        if(n < 0)
+        {
+            perror("select failed - closing down\n");
+            finished = true;
+        }
+        else
+        {
+            
+            // First, accept  any new connections to the server on the listening socket
+            if(FD_ISSET(listenSock, &readSockets))
+            {
+                
+               serverSock = accept(listenSock, (struct sockaddr *)&server,
+                                   &serverLen);
+
+               // Add new server to the list of open sockets
+               
+               FD_SET(serverSock, &openSockets);
+
+               // And update the maximum file descriptor
+               maxfds = std::max(maxfds, serverSock);
+
+               // create a new server to store information.
+               // clients[clientSock] = new Client(clientSock);
+               servers[serverSock] = new Server(serverSock);
 
 
-    //            // Decrement the number of sockets waiting to be dealt with
-    //            n--;
+               // Decrement the number of sockets waiting to be dealt with
+               n--;
+                
+               printf("server connected on server: %d\n", serverSock);
+            }
+            // Now check for commands from clients
+            while(n-- > 0)
+            {
+               for(auto const& pair : servers)
+               {
+                  Server *server = pair.second;
 
-    //            printf("server connected on server: %d\n", serverSock);
-    //         }
-    //         // Now check for commands from clients
-    //         while(n-- > 0)
-    //         {
-    //            for(auto const& pair : servers)
-    //            {
-    //               Server *server = pair.second;
+                  if(FD_ISSET(server->sock, &readSockets))
+                  {
+                      // recv() == 0 means client has closed connection
+                      if(recv(server->sock, buffer, sizeof(buffer), MSG_DONTWAIT) == 0)
+                      {
+                          printf("Client closed connection: %d", server->sock);
+                          close(server->sock);      
 
-    //               if(FD_ISSET(server->sock, &readSockets))
-    //               {
-    //                   // recv() == 0 means client has closed connection
-    //                   if(recv(server->sock, buffer, sizeof(buffer), MSG_DONTWAIT) == 0)
-    //                   {
-    //                       printf("Client closed connection: %d", server->sock);
-    //                       close(server->sock);      
+                          closeClient(server->sock, &openSockets, &maxfds);
 
-    //                       closeClient(server->sock, &openSockets, &maxfds);
-
-    //                   }
-    //                   // We don't check for -1 (nothing received) because select()
-    //                   // only triggers if there is something on the socket for us.
-    //                   else
-    //                   {
-    //                       std::cout << buffer << std::endl;
-    //                       clientCommand(server->sock, &openSockets, &maxfds, 
-    //                                     buffer);
-    //                   }
-    //               }
-    //            }
-    //         }
-    //     }
-    // }
+                      }
+                      // We don't check for -1 (nothing received) because select()
+                      // only triggers if there is something on the socket for us.
+                      else
+                      {
+                          
+                          std::cout << buffer << std::endl;
+                          clientCommand(server->sock, &openSockets, &maxfds, 
+                                        buffer);
+                      }
+                  }
+               }
+            }
+        }
+    }
 }
